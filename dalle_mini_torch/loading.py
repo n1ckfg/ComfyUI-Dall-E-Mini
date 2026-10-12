@@ -77,7 +77,9 @@ def _dalle_bart_state_dict(model, flat, dtype):
                 name = f"{stack_name}.layers.{index}.{_resolve(layers[index], inner)}"
                 state[_param_key(name, leaf, path)] = _to_torch(leaf, layer_array, dtype)
         else:
-            state[_param_key(_resolve(model, modules), leaf, path)] = _to_torch(leaf, array, dtype)
+            key = _param_key(_resolve(model, modules), leaf, path)
+            # the output projection is float32 in every precision, see DalleBart.__init__
+            state[key] = _to_torch(leaf, array, torch.float32 if key == "lm_head.weight" else dtype)
     return state
 
 

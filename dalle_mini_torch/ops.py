@@ -1,6 +1,6 @@
 """Fallback layer set used when the models are built outside ComfyUI.
 
-Inside ComfyUI the nodes pass ``comfy.ops.manual_cast`` instead, which has the same layer
+Inside ComfyUI the nodes pass ``comfy.ops.disable_weight_init`` instead, which has the same layer
 names and lets ComfyUI keep weights on one device/dtype while computing on another.
 Weights always come from a checkpoint, so random initialisation is skipped.
 """

@@ -356,7 +356,9 @@ class DalleBart(nn.Module):
         factory = {"dtype": dtype, "device": device, "operations": operations}
         self.encoder = TextEncoder(cfg, factory)
         self.decoder = ImageDecoder(cfg, factory)
-        self.lm_head = operations.Linear(cfg.d_model, cfg.image_vocab_size + 1, bias=False, dtype=dtype, device=device)
+        # Always float32: logits reach about 100, where half precision only resolves steps of 1/16 (fp16) or
+        # 1/2 (bf16), and super-conditioning multiplies that rounding error by condition_scale.
+        self.lm_head = operations.Linear(cfg.d_model, cfg.image_vocab_size + 1, bias=False, dtype=torch.float32, device=device)
 
     def encode_text(self, input_ids, attention_mask):
         """[B, T] token ids and mask -> [B, T, D] encoder states."""
@@ -367,7 +369,7 @@ class DalleBart(nn.Module):
         states = self.encode_text(input_ids, attention_mask)
         mask = attention_mask.to(torch.bool)[:, None, None, :]
         hidden = self.decoder(decoder_input_ids, self.decoder.cross_keys_values(states), mask)
-        return self.lm_head(hidden)
+        return self.lm_head(hidden.float())
 
     @torch.no_grad()
     def generate(self, cond, cond_mask, uncond=None, uncond_mask=None, *, uniform, condition_scale=10.0,
@@ -404,7 +406,7 @@ class DalleBart(nn.Module):
         current = torch.full((rows, 1), cfg.decoder_start_token_id, dtype=torch.long, device=device)
         for step in range(length):
             hidden = self.decoder(current, cross_kvs, mask, caches, position=step)
-            logits = self.lm_head(hidden[:, -1]).float()
+            logits = self.lm_head(hidden[:, -1].float())
             if guided:
                 logits = logits[batch:] + condition_scale * (logits[:batch] - logits[batch:])
             # Sampling runs on the CPU: it is a tiny tensor, and it keeps the result independent of

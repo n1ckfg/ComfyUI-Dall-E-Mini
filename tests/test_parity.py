@@ -5,6 +5,10 @@ Needs only torch, numpy and tokenizers (plus transformers for the sampling check
     python tests/test_parity.py sampling
     python tests/test_parity.py variants --ref ref/variants
     python tests/test_parity.py pretrained --ref ref/mini --model <mini dir> --vqgan <vqgan dir>
+
+``device`` needs no reference: it compares float32, float16 and bfloat16 on a GPU with float32 on the CPU.
+
+    python tests/test_parity.py device --model <mini dir> [--device cuda]
 """
 
 import argparse
@@ -115,6 +119,40 @@ def test_pretrained(args):
     print(f"  reference decoder output range before clipping: {unclipped.min():.2f} .. {unclipped.max():.2f}")
 
 
+@torch.no_grad()
+def test_device(args):
+    device = args.device or ("cuda" if torch.cuda.is_available() else "mps")
+    # per run: logit tolerance, and the least acceptable share of positions that keep their most likely token
+    runs = [("cpu", torch.float32, None, None), (device, torch.float32, 2e-4, 0.99),
+            (device, torch.float16, 2e-2, 0.95), (device, torch.bfloat16, 5e-2, 0.85)]
+    for run_device, dtype, tol, min_same in runs:
+        name = f"{run_device} {str(dtype).split('.')[-1]}"
+        model = load_dalle_bart(args.model, dtype=dtype, device=run_device)
+        cfg = model.config
+        processor = TextProcessor(os.path.join(args.model, "tokenizer.json"), cfg)
+        ids, mask = (torch.cat(pair).to(run_device)
+                     for pair in zip(processor("an armchair in the shape of an avocado"), processor("")))
+        states = model.encode_text(ids, mask)
+        if dtype == torch.float32:
+            greedy = model.generate(states[:1], mask[:1], states[1:], mask[1:],
+                                    uniform=torch.zeros(1, cfg.image_length), temperature=0.0)
+        if tol is None:
+            # every run is teacher-forced along the CPU's greedy tokens, so logits compare position by position
+            start = torch.full((1, 1), cfg.decoder_start_token_id)
+            decoder_input_ids = torch.cat([start, greedy[:, :-1]], dim=1).expand(2, -1)
+        logits = model(ids, mask, decoder_input_ids.to(run_device)).float().cpu()[..., :cfg.num_image_codes]
+        likely = (logits[1] + 10.0 * (logits[0] - logits[1])).argmax(-1)
+        if tol is None:
+            ref_logits, ref_likely, ref_greedy = logits, likely, greedy
+            continue
+        close(f"{name}: logits vs CPU float32", logits, ref_logits, tol)
+        same = float((likely == ref_likely).float().mean())
+        check(f"{name}: most likely super-conditioned token", same >= min_same, f"unchanged at {same:.1%} of positions")
+        if dtype == torch.float32:
+            same = int((greedy == ref_greedy).sum())
+            check(f"{name}: greedy tokens == CPU float32", same == greedy.numel(), f"{same}/{greedy.numel()} identical")
+
+
 def test_sampling(args):
     from transformers.generation.logits_process import (
         TemperatureLogitsWarper, TopKLogitsWarper, TopPLogitsWarper)
@@ -148,11 +186,13 @@ def test_sampling(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("mode", choices=["sampling", "variants", "pretrained"])
+    parser.add_argument("mode", choices=["sampling", "variants", "pretrained", "device"])
     parser.add_argument("--ref", help="reference folder written by flax_reference.py")
     parser.add_argument("--model", help="folder with the DALL·E Mini config.json, tokenizer and flax_model.msgpack")
     parser.add_argument("--vqgan", help="folder with the VQGAN config.json and flax_model.msgpack")
+    parser.add_argument("--device", help="GPU that the device mode compares with the CPU (default: cuda, else mps)")
     args = parser.parse_args()
-    {"sampling": test_sampling, "variants": test_variants, "pretrained": test_pretrained}[args.mode](args)
+    {"sampling": test_sampling, "variants": test_variants, "pretrained": test_pretrained,
+     "device": test_device}[args.mode](args)
     print(f"\n{len(failures)} failed" if failures else "\nall passed")
     sys.exit(1 if failures else 0)

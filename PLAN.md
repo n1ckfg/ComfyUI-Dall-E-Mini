@@ -1,10 +1,12 @@
 # Plan
 
-State as of 2026-10-12. The code is committed and pushed as `9ed00f9`.
+State as of 2026-10-12, after the GPU run on the Mac. That run closed items 1 to 3 of the previous plan for Apple Silicon and changed the code in one place (see "Changed by the Mac run"). CUDA, DirectML and ROCm are still untested.
 
 ## Done and verified
 
-All of this was run on the Raspberry Pi (CPU, float32) against ComfyUI 0.39.0 (`n1ckfg/ComfyUI` at `e8665ca`, torch 2.14, transformers 5.19).
+### Raspberry Pi (CPU, float32)
+
+ComfyUI 0.39.0 (`n1ckfg/ComfyUI` at `e8665ca`), torch 2.14, transformers 5.19.
 
 | What | How it was checked | Result |
 |---|---|---|
@@ -22,85 +24,125 @@ All of this was run on the Raspberry Pi (CPU, float32) against ComfyUI 0.39.0 (`
 | CLIP Rank ordering | Known images against two prompts | sensible order and scores |
 | Example workflow | Loaded in the real frontend with headless Chromium | 5 nodes, links and widget values intact |
 
+### Mac (M2 Max, 64 GB, MPS)
+
+ComfyUI 0.39.0 (same commit), torch 2.13.0.dev20260530, transformers 5.0.0rc3, macOS 15.7. ComfyUI was started with only this node pack loaded. Numbers are from the code as it is now, after the change below.
+
+| What | How it was checked | Result |
+|---|---|---|
+| Example workflow on MPS | mini, `auto` precision, through the HTTP API | fp16 chosen, `Requested to load DalleBart`, plausible avocado armchair. No CPU fallback, warning or traceback in 25 prompts |
+| Every precision on MPS | mini and mega in fp16, fp32 and bf16 | all load and give plausible images |
+| MPS against CPU float32 | `tests/test_parity.py device`, mini and mega: teacher-forced logits, and the token super-conditioning would pick at each of 256 positions | fp32: logits within 1.8e-4 (magnitude 141), greedy tokens 256/256 identical. fp16: same pick at 99.2% (mini) and 98.8% (mega) of positions. bf16: 94.1% and 91.4% |
+| Sampler settings on MPS | batch of 4, `condition_scale` 1, negative prompt, top-p with temperature, hashtag prompt, interrupt | all succeed. Image 1 of a batch of 4 equals the batch of 1. Interrupt stops within 0.2 s and the next prompt reproduces its image |
+| Low VRAM on a real GPU | Nodes run in-process with ComfyUI's VRAM state forced, which MPS never does by itself: `NO_VRAM` (all 681 mega layers cast from CPU at use) and `LOW_VRAM` with a pretend 1.6 GB GPU (mega split 1.1 GB on MPS, 3.9 GB on CPU; partial unload) | 512/512 tokens identical to the full load, for mini and mega |
+| Mega loads | Auto-download through the loader, then the nodes | 2588.0M parameters, loads in 2.3 s. `num_image_codes` is 16384 with `image_vocab_size` 16415. fp16: private memory peaks at 5.2 GB, resident memory at 15.1 GB counting the mapped checkpoint. fp32: 10.1 GB and 19.6 GB |
+| Mega against upstream | `flax_reference.py pretrained --generate`, then `test_parity.py pretrained` | encoder states 3.0e-5, logits 4.0e-4 (magnitude 138), greedy `generate()` tokens 256/256 identical |
+| Mini against upstream `generate()` | Same, for mini. This is the run that never finished on the Pi | 256/256 tokens identical. Upstream's loop took 2.5 minutes for mini and 26 minutes for mega on this CPU |
+| Earlier parity checks, again | 23 variants and the mini checks, on torch 2.13 and on torch 2.1.0 | all pass on both |
+| Auto-download | mini, mega, VQGAN and the hashtag word list, each fetched by the nodes on first use | worked; mega (10.4 GB) took 4 minutes |
+| CLIP Rank | transformers 5.0.0rc3 on MPS with ViT-B/32, ViT-B/16 and ViT-L/14, with and without `top_n` | sorted scores, the two avocado armchairs ranked above the plain armchair and the plain avocados |
+| Older ComfyUI | v0.3.75 (2025-11): full server through the HTTP API, with CLIP Rank. v0.3.30 (2025-04): nodes run in-process against its `comfy` package, because its server does not start with the frontend packages installed here | both work through the `ModelPatcher` fallback |
+
+Speed on MPS in fp16, 256 tokens with super-conditioning:
+
+| | 1 image | 4 images |
+|---|---|---|
+| mini | 1.9 s | 2.6 s |
+| mega | 5.0 s | 9.4 s |
+
+The M2 Max CPU in fp32 needs 18 s (mini) and 96 s (mega) for 4 images.
+
+## Changed by the Mac run
+
+- **The output projection is always float32** (`DalleBart.lm_head`, `loading.py`). The plan suspected the `.float()` after `lm_head`, and that was the place. Logits reach about 100, where fp16 only resolves steps of 1/16 and bf16 steps of 1/2, and super-conditioning multiplies that rounding error by `condition_scale`. Nothing looked broken, but with mega in fp16 the most likely token matched fp32 at only 77.7% of positions (bf16: 30.5%; mini: 96.5% and 74.2%). Casting the last hidden state to float32 before the projection brings that to the figures in the table. It costs 64 MB for mega and 32 MB for mini; the weights do not need to be more precise, only the output does.
+- **`tests/test_parity.py device`** compares fp32, fp16 and bf16 on a GPU with fp32 on the CPU. It needs no Flax reference and takes under a minute for mini, so it is the quickest check on a new backend.
+- The docstring of `ops.py` named the wrong ComfyUI layer set.
+
 ## Not verified yet
 
-In priority order. Items 1 to 3 need a machine with a GPU.
+### 1. CUDA, DirectML and ROCm
 
-### 1. Run it on a GPU
-
-Nothing has run on CUDA, MPS, DirectML or ROCm, and nothing has run in fp16. The code goes through ComfyUI's device management and uses only common operations (sampling itself is done on the CPU), but that is reasoning, not a test.
-
-- Install into a GPU ComfyUI, `pip install -r requirements.txt`, load `workflows/dalle_mini_example.json`, run with `mini`.
-- Check the console shows `Requested to load DalleBart` and the image is a plausible avocado armchair.
-- Things most likely to need a fix:
-  - **fp16 quality.** Upstream ran fp16 on GPU, so it should hold. If images look broken, set the loader's `precision` to `fp32` to confirm, then look at where the logits are cast (`DalleBart.generate`, the `.float()` after `lm_head`).
-  - **Dynamic VRAM on NVIDIA** (`ModelPatcherDynamic`, enabled when comfy-aimdo is installed). Weight loading in that mode was simulated on CPU; the patcher itself falls back to the classic one on CPU, so it has not run.
-  - **DirectML**: int64 token ids into `Embedding`, and `scaled_dot_product_attention`.
-  - **MPS**: fp16 `LayerNorm` and attention.
-
-### 2. Load mega
-
-The 10.4 GB mega checkpoint was never downloaded (fp32 does not fit in this Pi's RAM). It uses the same architecture as mini with larger numbers, so the risk is low, but check:
-
-- It loads and generates. Host RAM while loading should peak near 5.2 GB (fp16) plus page cache.
-- `num_image_codes` comes out as 16384 even though mega's `image_vocab_size` is 16415.
-
-### 3. Token-for-token comparison with upstream `generate()`
-
-This is the run that was cancelled: upstream's JAX loop needed more than 25 minutes on this CPU without finishing. It is now opt-in.
+Only the CPU and MPS have run. On a machine with one of the others:
 
 ```sh
-# JAX environment (see the docstring of tests/flax_reference.py), ideally with a GPU build of jaxlib
-python tests/flax_reference.py pretrained --generate \
-    --dalle-mini-src ../dalle-mini/src --vqgan-jax-src <dir holding vqgan_jax/> \
-    --model <mini folder> --vqgan <vqgan folder> --out ref/mini
-
-# PyTorch environment
-python tests/test_parity.py pretrained --ref ref/mini --model <mini folder> --vqgan <vqgan folder>
+python tests/test_parity.py device --model ComfyUI/models/dalle_mini/mini   # add --device for anything but cuda
 ```
 
-It replaces upstream's sampling with argmax and expects this port to produce the same 256 tokens at `temperature=0`. What it would add over the checks above is the super-conditioning arithmetic and the loop glue; the logits feeding them already match.
+then load `workflows/dalle_mini_example.json` and run it. Still open from the previous plan:
 
-### 4. Smaller gaps
+- **Dynamic VRAM on NVIDIA** (`ModelPatcherDynamic`, enabled when comfy-aimdo is installed). ComfyUI never enables it on MPS or the CPU. In that mode `Linear` layers are built without a weight, which is why `loading.py` picks the float32 projection by name instead of reading the dtype off the module.
+- **DirectML**: int64 token ids into `Embedding`, and `scaled_dot_product_attention`. `test_parity.py device` takes a device string, which DirectML does not have, so check it through the workflow.
 
-- Only ComfyUI 0.39 was tested. Older versions should work (`CoreModelPatcher` falls back to `ModelPatcher`), but `load_state_dict(assign=True)` needs torch 2.1 or newer.
-- CLIP Rank was only run with transformers 5.19 and ViT-B/32.
-- The `mini` and `mega` auto-download was not exercised (the same code downloaded the VQGAN; mini was linked in to save 1.75 GB).
+### 2. Smaller gaps
+
+- bf16 on MPS needs a torch newer than 2.1, which rejects the dtype there with a clear error. fp16 and fp32 pass on torch 2.1.0.
+- ComfyUI v0.3.30 was checked in-process only, not through its server.
 
 ## Decisions for you
 
 - **Add to Time-and-a-GAN** as a submodule, like the other ports: `git submodule add https://github.com/n1ckfg/ComfyUI-Dall-E-Mini`.
 - **License.** I copied upstream's Apache 2.0 `LICENSE`, since the model and text code are derived from it.
-- **`../dalle-mini/ARCHITECTURE.md` is wrong about mini.** Its comparison table says standard FFN, biases on, FFN dim 4096. The published `config.json` says GLU, NormFormer, no bias, FFN dim 2730, `use_scan: true`. The table's mini column describes `tools/train/config/mini/config.json`, which is not what was released.
+- **`../dalle-mini/ARCHITECTURE.md` is wrong about mini** (the copy next to this repo on the Pi). Its comparison table says standard FFN, biases on, FFN dim 4096. The published `config.json` says GLU, NormFormer, no bias, FFN dim 2730, `use_scan: true`. The table's mini column describes `tools/train/config/mini/config.json`, which is not what was released.
 - **Upstream bug worth knowing about:** `FlaxBartDecoder` never defines `final_ln` when `ln_positions` is `postln`/`deepnet` or `use_final_ln_decoder` is false, so those configurations crash upstream. The reference script patches it the way the encoder handles it; this port supports them.
 
 ## Possible follow-ups
 
 - **Live preview** while sampling: decode the partial token grid every row and send it through `ProgressBar.update_absolute(preview=...)`. The image fills in top to bottom.
 - **Image prompts**: port the VQGAN encoder (its weights are already in the checkpoint) and let the sampler start from the top rows of an existing image.
-- **fp16 safetensors cache for mega**, to halve the 10.4 GB on disk and the load time.
+- **fp16 safetensors cache for mega**, to halve the 10.4 GB on disk. Load time is no longer a reason: the checkpoint loads in 2.3 s from an SSD.
 - **CPU speed**: generation costs about 1.1 s per token on the Pi regardless of batch size, because every step reads all 850 MB of decoder weights. bf16 or int8 weights would help; nothing else will.
 - A second example workflow with CLIP Rank and an upscaler.
 
-## Test assets on this machine
+## Test assets
 
-Everything heavy is in `~/.cache/dalle-mini-port-test/` (4.9 GB), outside the repo, because `/tmp` here is a 500 MB RAM disk:
+### On the Mac
+
+The models are where the loader put them, in `ComfyUI/models/dalle_mini/` (`mini` 1.75 GB, `mega` 10.4 GB, `vqgan_imagenet_f16_16384` 0.3 GB). CLIP Rank left three `models--openai--clip-vit-*` folders (2.8 GB) in `~/.cache/huggingface/hub/`.
+
+Everything else is in `~/.cache/dalle-mini-port-test/` (1.1 GB):
+
+| Path | Contents |
+|---|---|
+| `venv-flax/` | Python 3.11, JAX 0.4.20 / Flax 0.7.5 / transformers 4.25.1, for `tests/flax_reference.py` |
+| `venv-torch21/` | torch 2.1.0, to check the oldest supported torch |
+| `src/` | Shallow clones of `borisdayma/dalle-mini` and `patil-suraj/vqgan-jax` |
+| `weights/` | Symlinks to `mini`, `mega` and the VQGAN in `ComfyUI/models/dalle_mini/` |
+| `ref/` | Flax reference outputs: `variants/`, and `mini/` and `mega/` with upstream's `generate()` tokens |
+| `ComfyUI-v0.3.30/`, `ComfyUI-v0.3.75/` | Shallow clones of older ComfyUI releases with this repo symlinked into `custom_nodes/` |
+
+To rerun the checks:
+
+```sh
+W=~/.cache/dalle-mini-port-test
+python tests/test_parity.py sampling
+python tests/test_parity.py variants --ref $W/ref/variants
+python tests/test_parity.py pretrained --ref $W/ref/mini --model $W/weights/mini --vqgan $W/weights/vqgan
+python tests/test_parity.py pretrained --ref $W/ref/mega --model $W/weights/mega --vqgan $W/weights/vqgan
+python tests/test_parity.py device --model $W/weights/mini
+python tests/test_parity.py device --model $W/weights/mega
+```
+
+To dump the references again (the mega run needs about 16 GB of RAM):
+
+```sh
+cd $W
+venv-flax/bin/python <repo>/tests/flax_reference.py variants --dalle-mini-src src/dalle-mini/src --out ref/variants
+venv-flax/bin/python <repo>/tests/flax_reference.py pretrained --generate --dalle-mini-src src/dalle-mini/src \
+    --vqgan-jax-src src/vqgan-jax --model weights/mini --vqgan weights/vqgan --out ref/mini
+```
+
+### On the Raspberry Pi
+
+Everything heavy is in `~/.cache/dalle-mini-port-test/` (4.9 GB), outside the repo, because `/tmp` there is a 500 MB RAM disk:
 
 | Path | Contents |
 |---|---|
 | `venv-comfy/`, `ComfyUI/` | CPU ComfyUI test install; this repo is symlinked into `custom_nodes/`, and `weights/mini` into `models/dalle_mini/` |
 | `venv-flax/` | JAX 0.4.20 / Flax 0.7.5 / transformers 4.25.1, for `tests/flax_reference.py` |
 | `weights/` | mini and VQGAN checkpoints |
-| `ref/` | Flax reference outputs (`variants/`, `mini/`) |
+| `ref/` | Flax reference outputs (`variants/`, `mini/`), without upstream's `generate()` tokens |
 | `out/` | Generated test images |
 
-Delete the folder when you no longer need it. The reference runs also left `models--dalle-mini--dalle-mini` (word list) and `models--openai--clip-vit-base-patch32` in `~/.cache/huggingface/hub/`.
+The reference runs also left `models--dalle-mini--dalle-mini` (word list) and `models--openai--clip-vit-base-patch32` in `~/.cache/huggingface/hub/`. The checks there use `$W/venv-comfy/bin/python` with the same commands as above.
 
-To rerun the checks here:
-
-```sh
-W=~/.cache/dalle-mini-port-test
-$W/venv-comfy/bin/python tests/test_parity.py sampling
-$W/venv-comfy/bin/python tests/test_parity.py variants --ref $W/ref/variants
-$W/venv-comfy/bin/python tests/test_parity.py pretrained --ref $W/ref/mini --model $W/weights/mini --vqgan $W/weights/vqgan
-```
+Delete either folder when you no longer need it.

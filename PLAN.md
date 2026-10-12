@@ -79,12 +79,21 @@ then load `workflows/dalle_mini_example.json` and run it. Still open from the pr
 - bf16 on MPS needs a torch newer than 2.1, which rejects the dtype there with a clear error. fp16 and fp32 pass on torch 2.1.0.
 - ComfyUI v0.3.30 was checked in-process only, not through its server.
 
-## Decisions for you
+## Decided
 
-- **Add to Time-and-a-GAN** as a submodule, like the other ports: `git submodule add https://github.com/n1ckfg/ComfyUI-Dall-E-Mini`.
-- **License.** I copied upstream's Apache 2.0 `LICENSE`, since the model and text code are derived from it.
-- **`../dalle-mini/ARCHITECTURE.md` is wrong about mini** (the copy next to this repo on the Pi). Its comparison table says standard FFN, biases on, FFN dim 4096. The published `config.json` says GLU, NormFormer, no bias, FFN dim 2730, `use_scan: true`. The table's mini column describes `tools/train/config/mini/config.json`, which is not what was released.
-- **Upstream bug worth knowing about:** `FlaxBartDecoder` never defines `final_ln` when `ln_positions` is `postln`/`deepnet` or `use_final_ln_decoder` is false, so those configurations crash upstream. The reference script patches it the way the encoder handles it; this port supports them.
+- **Time-and-a-GAN**: this repo is a submodule there.
+- **License**: upstream's Apache 2.0 `LICENSE` stays, since the model and text code are derived from it.
+- **`ARCHITECTURE.md` in `n1ckfg/dalle-mini`**: section 9 and two comments in section 8 are corrected. The released mini is the `mini_glu` architecture (GLU, NormFormer, no bias, FFN dim 2730) with a 50264-token text vocabulary, a 16384-entry image vocabulary and `use_scan: true`. This plan used to say the old table described `tools/train/config/mini/config.json`. It did not: that file only sets FFN dim 4096, and the `DalleBartConfig` defaults make it GLU without biases as well. The old table was also wrong about micro (2 layers, 2 heads, FFN dim 256) and `mini_glu` (LayerNorm, FFN dim 2730).
+
+## Upstream bug
+
+`FlaxBartDecoder` cannot be built without a final norm. In `src/dalle_mini/model/modeling.py` (upstream `f0be4de`):
+
+- `FlaxBartDecoder.setup` assigns `self.final_ln` only inside `if self.config.use_final_ln_decoder and self.config.ln_positions != "postln":` (line 1241). There is no `else`.
+- `FlaxBartDecoder.__call__` reads it unconditionally: `if self.final_ln is None:` (line 1286).
+- `FlaxBartEncoder.setup` has the same `if` (line 1148) followed by `else: self.final_ln = None` (line 1156), so the encoder works.
+
+Every config with `use_final_ln_decoder=False`, `ln_positions="postln"` or `ln_positions="deepnet"` (`configuration.py` line 91 turns `deepnet` into `postln`) fails in the first forward pass with `AttributeError: "FlaxBartDecoder" object has no attribute "final_ln"`. Neither published checkpoint uses those settings. `tests/flax_reference.py` sets `FlaxBartDecoder.final_ln = None` on the class, which is what lets its `postln`, `postln_unscanned`, `deepnet` and `no_final_ln` variants run; this port supports them.
 
 ## Possible follow-ups
 

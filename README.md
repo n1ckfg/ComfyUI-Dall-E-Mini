@@ -46,7 +46,7 @@ Images are 256×256; chain any ComfyUI upscaler after the decode node.
 
 | Setting | Default | |
 |---|---|---|
-| `seed` | | Image *i* of a batch depends only on the seed and *i*, so raising `batch_size` keeps the earlier images. |
+| `seed` | | Image *i* of a batch depends only on the seed and *i*, so raising `batch_size` keeps the earlier images. A different `precision` or device can give a different image for the same seed: one changed token changes every token after it. |
 | `batch_size` | 1 | Number of images. DALL·E Mini is at its best when you make several and pick. |
 | `condition_scale` | 10 | Super-conditioning: classifier-free guidance on the token logits. Higher follows the prompt more closely. 1 turns it off and doubles the speed. |
 | `top_k` | 50 | Sample each token from the k most likely codes. 0 considers all 16384. |
@@ -72,6 +72,7 @@ DALL·E Mini is not a diffusion model. It treats text-to-image as translation:
 
 - **Weights** are read straight from `flax_model.msgpack`, including checkpoints saved with scanned (stacked) layers.
 - **Generation** uses a key/value cache and runs the conditional and unconditional branches as one batch. Upstream ran two decoder passes per token and recomputed cross-attention keys each step.
+- **Logits are float32 in every precision.** Upstream computes them in the model's dtype. They reach about 100, where fp16 only resolves steps of 1/16, and super-conditioning multiplies that rounding error by the condition scale.
 - **Negative prompt**: the unconditional branch of super-conditioning accepts any prompt, not only the empty one.
 - **Tokens are restricted to the 16384 real codebook entries.** The model's output layer also covers start/padding ids that the VQGAN cannot decode.
 - **An empty prompt is the trained unconditional input.** Upstream would normalise it to a single space, which is a different token sequence from the blank captions used in training.
@@ -85,10 +86,16 @@ DALL·E Mini is not a diffusion model. It treats text-to-image as translation:
 Checked against the original JAX/Flax code on CPU (float32):
 
 - 23 tiny random models covering every architecture switch match upstream logits to about 1e-6, and the cached decoding path matches the full forward pass.
-- With the published mini weights, text normalisation, token ids, encoder states, logits at all 256 positions and the VQGAN image match upstream.
-- The nodes run end to end in ComfyUI 0.39 on CPU.
+- With the published mini and mega weights, text normalisation, token ids, encoder states, logits at all 256 positions and the VQGAN image match upstream.
+- With sampling replaced by argmax, this port and upstream's `generate()` produce the same 256 tokens, for mini and for mega.
 
-Not yet run: any GPU backend, fp16, the mega checkpoint, and a token-for-token comparison with upstream's `generate()` loop. See [PLAN.md](PLAN.md).
+Run end to end in ComfyUI 0.39 on CPU (Raspberry Pi) and on Apple Silicon (MPS, M2 Max). The nodes also run against ComfyUI 0.3.75 and 0.3.30. On MPS:
+
+- mini and mega work in fp16, fp32 and bf16. fp32 on MPS gives the same greedy tokens as the CPU. Against CPU fp32, super-conditioning picks the same most likely token at 99% of positions in fp16 and at 91% to 94% in bf16.
+- 256 tokens take about 2 s with mini and 5 s with mega on MPS in fp16; four images take 3 s and 9 s.
+- ComfyUI's low VRAM path, with weights cast from the CPU at use, gives the same tokens as a full load.
+
+Not yet run: CUDA, DirectML, ROCm, and ComfyUI's dynamic VRAM mode on NVIDIA. See [PLAN.md](PLAN.md).
 
 ## Tests
 
@@ -98,6 +105,12 @@ Not yet run: any GPU backend, fp16, the mega checkpoint, and a token-for-token c
 python tests/test_parity.py sampling
 python tests/test_parity.py variants --ref <ref>/variants
 python tests/test_parity.py pretrained --ref <ref>/mini --model <mini folder> --vqgan <vqgan folder>
+```
+
+`device` needs no reference data. It compares fp32, fp16 and bf16 on a GPU with fp32 on the CPU, which is the quickest check on a new backend:
+
+```sh
+python tests/test_parity.py device --model <mini folder> [--device cuda]
 ```
 
 ## Credits

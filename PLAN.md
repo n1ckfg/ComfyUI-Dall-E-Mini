@@ -30,14 +30,15 @@ ComfyUI 0.39.0 (same commit), torch 2.13.0.dev20260530, transformers 5.0.0rc3, m
 
 | What | How it was checked | Result |
 |---|---|---|
-| Example workflow on MPS | mini, `auto` precision, through the HTTP API | fp16 chosen, `Requested to load DalleBart`, plausible avocado armchair. No CPU fallback, warning or traceback in 25 prompts |
+| Example workflow on MPS | `workflows/dalle_mini_example.json` (mini, `auto` precision, batch of 4) through the HTTP API | fp16 chosen, `Requested to load DalleBart`, four plausible images in 4 s. No CPU fallback, warning or traceback in 32 prompts, 14 of them on the final code |
 | Every precision on MPS | mini and mega in fp16, fp32 and bf16 | all load and give plausible images |
 | MPS against CPU float32 | `tests/test_parity.py device`, mini and mega: teacher-forced logits, and the token super-conditioning would pick at each of 256 positions | fp32: logits within 1.8e-4 (magnitude 141), greedy tokens 256/256 identical. fp16: same pick at 99.2% (mini) and 98.8% (mega) of positions. bf16: 94.1% and 91.4% |
-| Sampler settings on MPS | batch of 4, `condition_scale` 1, negative prompt, top-p with temperature, hashtag prompt, interrupt | all succeed. Image 1 of a batch of 4 equals the batch of 1. Interrupt stops within 0.2 s and the next prompt reproduces its image |
-| Low VRAM on a real GPU | Nodes run in-process with ComfyUI's VRAM state forced, which MPS never does by itself: `NO_VRAM` (all 681 mega layers cast from CPU at use) and `LOW_VRAM` with a pretend 1.6 GB GPU (mega split 1.1 GB on MPS, 3.9 GB on CPU; partial unload) | 512/512 tokens identical to the full load, for mini and mega |
+| Sampler settings on MPS | `condition_scale` 1, negative prompt, top-p with temperature, hashtag prompt, interrupt during a mega batch of 32 | all succeed. Interrupt stops within 0.2 s and the next prompt runs normally |
+| A seed keeps its images when the batch grows | Tokens of image 1 from a batch of 1 and a batch of 4, 5 seeds, mini and mega, fp16 and fp32 | identical tokens in all 20 cases. The saved PNGs differ by 1/255 in 5 of 65536 pixels, from the VQGAN decoding a different batch |
+| Low VRAM on a real GPU | Nodes run in-process with ComfyUI's VRAM state forced, because ComfyUI ignores `--lowvram` and `--novram` on MPS: `NO_VRAM` (all 681 mega layers cast from the CPU at use) and `LOW_VRAM` with a pretend 1.6 GB GPU (mega split 1.1 GB on MPS, 3.9 GB on the CPU) | 512/512 tokens identical to the full load, for mini and mega |
 | Mega loads | Auto-download through the loader, then the nodes | 2588.0M parameters, loads in 2.3 s. `num_image_codes` is 16384 with `image_vocab_size` 16415. fp16: private memory peaks at 5.2 GB, resident memory at 15.1 GB counting the mapped checkpoint. fp32: 10.1 GB and 19.6 GB |
 | Mega against upstream | `flax_reference.py pretrained --generate`, then `test_parity.py pretrained` | encoder states 3.0e-5, logits 4.0e-4 (magnitude 138), greedy `generate()` tokens 256/256 identical |
-| Mini against upstream `generate()` | Same, for mini. This is the run that never finished on the Pi | 256/256 tokens identical. Upstream's loop took 2.5 minutes for mini and 26 minutes for mega on this CPU |
+| Mini against upstream `generate()` | Same, for mini. This is the run that never finished on the Pi | 256/256 tokens identical. The upstream reference run took under 3 minutes for mini and 26 minutes for mega on this CPU |
 | Earlier parity checks, again | 23 variants and the mini checks, on torch 2.13 and on torch 2.1.0 | all pass on both |
 | Auto-download | mini, mega, VQGAN and the hashtag word list, each fetched by the nodes on first use | worked; mega (10.4 GB) took 4 minutes |
 | CLIP Rank | transformers 5.0.0rc3 on MPS with ViT-B/32, ViT-B/16 and ViT-L/14, with and without `top_n` | sorted scores, the two avocado armchairs ranked above the plain armchair and the plain avocados |
@@ -70,7 +71,7 @@ python tests/test_parity.py device --model ComfyUI/models/dalle_mini/mini   # ad
 
 then load `workflows/dalle_mini_example.json` and run it. Still open from the previous plan:
 
-- **Dynamic VRAM on NVIDIA** (`ModelPatcherDynamic`, enabled when comfy-aimdo is installed). ComfyUI never enables it on MPS or the CPU. In that mode `Linear` layers are built without a weight, which is why `loading.py` picks the float32 projection by name instead of reading the dtype off the module.
+- **Dynamic VRAM on NVIDIA** (`ModelPatcherDynamic`, enabled when comfy-aimdo is installed). comfy-aimdo only supports Windows and Linux, so it could not run here. In that mode `Linear` layers are built without a weight, which is why `loading.py` picks the float32 projection by name instead of reading the dtype off the module.
 - **DirectML**: int64 token ids into `Embedding`, and `scaled_dot_product_attention`. `test_parity.py device` takes a device string, which DirectML does not have, so check it through the workflow.
 
 ### 2. Smaller gaps

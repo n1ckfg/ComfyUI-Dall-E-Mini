@@ -1,0 +1,15 @@
+[project]
+name = "comfyui-dall-e-mini"
+description = "DALL·E Mini / Mega text-to-image as native PyTorch nodes: no JAX, GPU accelerated on CUDA, MPS, DirectML and ROCm"
+version = "0.0.1"
+license = { file = "LICENSE" }
+dependencies = ["ftfy", "unidecode", "emoji"]
+
+[project.urls]
+Repository = "https://github.com/n1ckfg/ComfyUI-Dall-E-Mini"
+
+#  Used by Comfy Registry https://comfyregistry.org
+[tool.comfy]
+PublisherId = "n1ckfg"
+DisplayName = "ComfyUI-Dall-E-Mini"
+Icon = ""

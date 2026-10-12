@@ -1,0 +1,257 @@
+{
+  "id": "5b1f0c0e-6a4e-4f1c-9d53-da11e0000001",
+  "revision": 0,
+  "last_node_id": 5,
+  "last_link_id": 6,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "DalleMiniLoader",
+      "pos": [
+        0,
+        0
+      ],
+      "size": [
+        300,
+        110
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "dalle_model",
+          "type": "DALLE_MINI_MODEL",
+          "links": [
+            1,
+            2
+          ]
+        },
+        {
+          "name": "vqgan",
+          "type": "DALLE_MINI_VQGAN",
+          "links": [
+            4
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "DalleMiniLoader"
+      },
+      "widgets_values": [
+        "mini",
+        "auto"
+      ]
+    },
+    {
+      "id": 2,
+      "type": "DalleMiniTextEncode",
+      "pos": [
+        350,
+        0
+      ],
+      "size": [
+        400,
+        160
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "dalle_model",
+          "type": "DALLE_MINI_MODEL",
+          "link": 1
+        }
+      ],
+      "outputs": [
+        {
+          "name": "conditioning",
+          "type": "DALLE_MINI_CONDITIONING",
+          "links": [
+            3
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "DalleMiniTextEncode"
+      },
+      "widgets_values": [
+        "an armchair in the shape of an avocado"
+      ]
+    },
+    {
+      "id": 3,
+      "type": "DalleMiniSampler",
+      "pos": [
+        800,
+        0
+      ],
+      "size": [
+        320,
+        262
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "dalle_model",
+          "type": "DALLE_MINI_MODEL",
+          "link": 2
+        },
+        {
+          "name": "positive",
+          "type": "DALLE_MINI_CONDITIONING",
+          "link": 3
+        },
+        {
+          "name": "negative",
+          "type": "DALLE_MINI_CONDITIONING",
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "name": "tokens",
+          "type": "DALLE_MINI_TOKENS",
+          "links": [
+            5
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "DalleMiniSampler"
+      },
+      "widgets_values": [
+        0,
+        "randomize",
+        4,
+        10.0,
+        50,
+        1.0,
+        1.0
+      ]
+    },
+    {
+      "id": 4,
+      "type": "DalleMiniDecode",
+      "pos": [
+        1170,
+        0
+      ],
+      "size": [
+        290,
+        66
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "vqgan",
+          "type": "DALLE_MINI_VQGAN",
+          "link": 4
+        },
+        {
+          "name": "tokens",
+          "type": "DALLE_MINI_TOKENS",
+          "link": 5
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            6
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "DalleMiniDecode"
+      }
+    },
+    {
+      "id": 5,
+      "type": "PreviewImage",
+      "pos": [
+        1510,
+        0
+      ],
+      "size": [
+        520,
+        560
+      ],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 6
+        }
+      ],
+      "outputs": [],
+      "properties": {
+        "Node name for S&R": "PreviewImage"
+      }
+    }
+  ],
+  "links": [
+    [
+      1,
+      1,
+      0,
+      2,
+      0,
+      "DALLE_MINI_MODEL"
+    ],
+    [
+      2,
+      1,
+      0,
+      3,
+      0,
+      "DALLE_MINI_MODEL"
+    ],
+    [
+      3,
+      2,
+      0,
+      3,
+      1,
+      "DALLE_MINI_CONDITIONING"
+    ],
+    [
+      4,
+      1,
+      1,
+      4,
+      0,
+      "DALLE_MINI_VQGAN"
+    ],
+    [
+      5,
+      3,
+      0,
+      4,
+      1,
+      "DALLE_MINI_TOKENS"
+    ],
+    [
+      6,
+      4,
+      0,
+      5,
+      0,
+      "IMAGE"
+    ]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {},
+  "version": 0.4
+}

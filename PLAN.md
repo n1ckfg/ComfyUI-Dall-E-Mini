@@ -1,6 +1,6 @@
 # Plan
 
-State as of 2026-10-12. Nothing is committed yet; every file in the repo is new and untracked.
+State as of 2026-10-12. The code is committed and pushed as `9ed00f9`.
 
 ## Done and verified
 
@@ -15,7 +15,8 @@ All of this was run on the Raspberry Pi (CPU, float32) against ComfyUI 0.39.0 (`
 | VQGAN decoder | Decoded image vs. vqgan-jax | 3.2e-5 |
 | Text normaliser and tokenizer | 24 prompts (emoji, mojibake, hashtags, HTML, truncation) vs. upstream | identical text and token ids |
 | Sampling filters | Empirical frequencies vs. transformers' temperature / top-k / top-p warpers | within sampling noise |
-| Real generation | "an armchair in the shape of an avocado", mini, seed 0, standalone | correct image; 292 s for 256 tokens |
+| Real generation | "an armchair in the shape of an avocado", mini, seed 0, batch of 2, standalone | correct image; 292 s for 256 tokens |
+| Real mini inside ComfyUI | Same prompt and seed, batch of 1, through the HTTP API | success in 333 s; same image as image 0 of the standalone batch (pixels differ by at most 1/255, from PNG rounding) |
 | ComfyUI layer classes | Loaded through `comfy.ops.disable_weight_init`, normal and deferred-weight mode, and with every layer forced onto the weight-casting (low VRAM) path | same logits |
 | Nodes in a running ComfyUI | Loader, Text Encode, Sampler (with and without negative), Decode, CLIP Rank, Save, through the HTTP API with a tiny model and the real VQGAN | all succeeded; VQGAN auto-download worked |
 | CLIP Rank ordering | Known images against two prompts | sensible order and scores |
@@ -68,7 +69,6 @@ It replaces upstream's sampling with argmax and expects this port to produce the
 
 ## Decisions for you
 
-- **Commit and push.** `origin` is `git@github.com:n1ckfg/ComfyUI-Dall-E-Mini`. `PLAN.md` and `tests/` are safe to publish; drop them if you prefer the repo lean.
 - **Add to Time-and-a-GAN** as a submodule, like the other ports: `git submodule add https://github.com/n1ckfg/ComfyUI-Dall-E-Mini`.
 - **License.** I copied upstream's Apache 2.0 `LICENSE`, since the model and text code are derived from it.
 - **`../dalle-mini/ARCHITECTURE.md` is wrong about mini.** Its comparison table says standard FFN, biases on, FFN dim 4096. The published `config.json` says GLU, NormFormer, no bias, FFN dim 2730, `use_scan: true`. The table's mini column describes `tools/train/config/mini/config.json`, which is not what was released.
@@ -88,7 +88,7 @@ Everything heavy is in `~/.cache/dalle-mini-port-test/` (4.9 GB), outside the re
 
 | Path | Contents |
 |---|---|
-| `venv-comfy/`, `ComfyUI/` | CPU ComfyUI test install; this repo is symlinked into `custom_nodes/` |
+| `venv-comfy/`, `ComfyUI/` | CPU ComfyUI test install; this repo is symlinked into `custom_nodes/`, and `weights/mini` into `models/dalle_mini/` |
 | `venv-flax/` | JAX 0.4.20 / Flax 0.7.5 / transformers 4.25.1, for `tests/flax_reference.py` |
 | `weights/` | mini and VQGAN checkpoints |
 | `ref/` | Flax reference outputs (`variants/`, `mini/`) |
